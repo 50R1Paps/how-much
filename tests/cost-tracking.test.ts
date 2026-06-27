@@ -42,6 +42,17 @@ const SAMPLE_USAGE_RESPONSE = JSON.stringify({
   },
 });
 
+const SAMPLE_RESPONSES_API_RESPONSE = JSON.stringify({
+  id: "resp_123",
+  object: "response",
+  model: "gpt-5-codex",
+  usage: {
+    input_tokens: 240,
+    output_tokens: 80,
+    input_tokens_details: { cached_tokens: 40 },
+  },
+});
+
 describe("Cost tracking (slice 02)", () => {
   let mockProvider: { server: Server; port: number };
   let proxy: ProxyServer;
@@ -116,6 +127,58 @@ describe("Cost tracking (slice 02)", () => {
       100,
       50,
       20,
+      0,
+      "USD",
+    );
+  });
+
+  it("extracts usage from OpenAI Responses API JSON response", async () => {
+    mockProvider = await startMockProvider((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(SAMPLE_RESPONSES_API_RESPONSE);
+    });
+
+    const mockComputeCost = vi.fn().mockResolvedValue(0.0025);
+
+    proxy = await createProxyServer({
+      port: 0,
+      routes: { openai: `http://127.0.0.1:${mockProvider.port}` },
+      storage,
+      sessionId: "test-session-responses-json",
+      currency: "USD",
+      computeCostFn: mockComputeCost,
+    });
+
+    const res = await fetch(
+      `http://127.0.0.1:${proxy.port}/openai/v1/responses`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer sk-test",
+        },
+        body: JSON.stringify({ model: "gpt-5-codex", input: "hello" }),
+      },
+    );
+
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(storage.getAllRecords()).toHaveLength(1);
+    });
+
+    const record = storage.getAllRecords()[0];
+    expect(record.model).toBe("gpt-5-codex");
+    expect(record.input_tokens).toBe(240);
+    expect(record.output_tokens).toBe(80);
+    expect(record.cache_read_tokens).toBe(40);
+    expect(record.cost).toBe(0.0025);
+
+    expect(mockComputeCost).toHaveBeenCalledWith(
+      "gpt-5-codex",
+      240,
+      80,
+      40,
       0,
       "USD",
     );
@@ -342,5 +405,72 @@ describe("Cost tracking (slice 02)", () => {
 
     expect(storage.getAllRecords()).toHaveLength(0);
     expect(mockComputeCost).not.toHaveBeenCalled();
+  });
+
+  it("extracts usage from Responses API SSE response.completed event", async () => {
+    const sseChunks = [
+      'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
+      'data: {"type":"response.completed","response":{"model":"gpt-5-codex","usage":{"input_tokens":300,"output_tokens":120,"input_tokens_details":{"cached_tokens":50}}}}\n\n',
+      "data: [DONE]\n\n",
+    ];
+
+    mockProvider = await startMockProvider((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (const chunk of sseChunks) {
+        res.write(chunk);
+      }
+      res.end();
+    });
+
+    const mockComputeCost = vi.fn().mockResolvedValue(0.0042);
+
+    proxy = await createProxyServer({
+      port: 0,
+      routes: { openai: `http://127.0.0.1:${mockProvider.port}` },
+      storage,
+      sessionId: "test-session-responses-sse",
+      currency: "USD",
+      computeCostFn: mockComputeCost,
+    });
+
+    const res = await fetch(
+      `http://127.0.0.1:${proxy.port}/openai/v1/responses`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer sk-test",
+        },
+        body: JSON.stringify({
+          model: "gpt-5-codex",
+          input: "hello",
+          stream: true,
+        }),
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    await res.text();
+
+    await vi.waitFor(() => {
+      expect(storage.getAllRecords()).toHaveLength(1);
+    });
+
+    const record = storage.getAllRecords()[0];
+    expect(record.model).toBe("gpt-5-codex");
+    expect(record.input_tokens).toBe(300);
+    expect(record.output_tokens).toBe(120);
+    expect(record.cache_read_tokens).toBe(50);
+    expect(record.cost).toBe(0.0042);
+
+    expect(mockComputeCost).toHaveBeenCalledWith(
+      "gpt-5-codex",
+      300,
+      120,
+      50,
+      0,
+      "USD",
+    );
   });
 });

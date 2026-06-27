@@ -6,22 +6,36 @@ export interface UsageData {
   cacheWriteTokens: number;
 }
 
-function extractUsageFromJson(json: any): UsageData | null {
-  if (!json.usage || !json.model) return null;
+function getModelFromPayload(json: any): string | null {
+  if (typeof json?.model === "string") return json.model;
+  if (typeof json?.response?.model === "string") return json.response.model;
+  return null;
+}
 
-  const usage = json.usage;
-  const inputTokens = usage.prompt_tokens ?? 0;
-  const outputTokens = usage.completion_tokens ?? 0;
+function getUsageFromPayload(json: any): any | null {
+  if (json?.usage) return json.usage;
+  if (json?.response?.usage) return json.response.usage;
+  return null;
+}
+
+function extractUsageFromJson(json: any): UsageData | null {
+  const usage = getUsageFromPayload(json);
+  const model = getModelFromPayload(json);
+  if (!usage || !model) return null;
+
+  const inputTokens = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+  const outputTokens = usage.completion_tokens ?? usage.output_tokens ?? 0;
 
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
 
-  if (usage.prompt_tokens_details) {
-    cacheReadTokens = usage.prompt_tokens_details.cached_tokens ?? 0;
-  }
+  cacheReadTokens =
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.input_tokens_details?.cached_tokens ??
+    0;
 
   return {
-    model: json.model,
+    model,
     inputTokens,
     outputTokens,
     cacheReadTokens,

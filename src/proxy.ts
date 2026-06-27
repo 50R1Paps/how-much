@@ -56,6 +56,10 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
           return;
         }
 
+        console.log(
+          `[proxy] ${req.method || "GET"} ${url.pathname}${url.search}`,
+        );
+
         const remainingPath = "/" + pathSegments.slice(1).join("/");
         const targetUrl = new URL(remainingPath, targetBase);
         if (url.search) {
