@@ -1,8 +1,15 @@
 import { createServer, type Server } from "node:http";
+import { extractUsage } from "./adapters/openai.js";
+import { calculateCost, type CostCalculator } from "./cost.js";
+import type { Storage } from "./storage.js";
 
 export interface ProxyOptions {
   port: number;
   routes: Record<string, string>;
+  storage?: Storage;
+  sessionId?: string;
+  currency?: string;
+  computeCostFn?: CostCalculator;
 }
 
 export interface ProxyServer {
@@ -12,7 +19,14 @@ export interface ProxyServer {
 
 export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
   return new Promise((resolve, reject) => {
-    const { port, routes } = options;
+    const {
+      port,
+      routes,
+      storage,
+      sessionId,
+      currency = "USD",
+      computeCostFn = calculateCost,
+    } = options;
 
     const server = createServer(async (req, res) => {
       try {
@@ -33,7 +47,7 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
           res.end(
             JSON.stringify({
               error: `Unknown provider "${providerKey}". Known providers: ${Object.keys(routes).join(", ")}`,
-            })
+            }),
           );
           return;
         }
@@ -69,14 +83,54 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
         res.writeHead(response.status, responseHeaders);
 
         if (response.body) {
+          const contentType = response.headers.get("content-type") || "";
+          const isStreaming = contentType.includes("text/event-stream");
+          const shouldBuffer = storage && !isStreaming;
+
           const reader = response.body.getReader();
+          const chunks: Buffer[] = [];
           const pump = async (): Promise<void> => {
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
               res.write(value);
+              if (shouldBuffer) {
+                chunks.push(Buffer.from(value));
+              }
             }
             res.end();
+
+            if (shouldBuffer && chunks.length > 0) {
+              const body = Buffer.concat(chunks).toString("utf-8");
+              const usage = extractUsage(body);
+              if (usage) {
+                let cost: number | null = null;
+                try {
+                  cost = await computeCostFn(
+                    usage.model,
+                    usage.inputTokens,
+                    usage.outputTokens,
+                    usage.cacheReadTokens,
+                    usage.cacheWriteTokens,
+                    currency,
+                  );
+                } catch {
+                  console.warn(`⚠ Unknown model: ${usage.model}`);
+                }
+                storage!.insertRecord({
+                  timestamp: new Date().toISOString(),
+                  provider: providerKey,
+                  model: usage.model,
+                  input_tokens: usage.inputTokens,
+                  output_tokens: usage.outputTokens,
+                  cache_read_tokens: usage.cacheReadTokens,
+                  cache_write_tokens: usage.cacheWriteTokens,
+                  cost,
+                  currency,
+                  session_id: sessionId ?? "",
+                });
+              }
+            }
           };
           pump().catch((err) => {
             console.error("Stream error:", err);
@@ -100,9 +154,7 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
 
     server.listen(port, "127.0.0.1", () => {
       const actualPort =
-        port === 0
-          ? (server.address() as { port: number }).port
-          : port;
+        port === 0 ? (server.address() as { port: number }).port : port;
       resolve({
         port: actualPort,
         close: () =>

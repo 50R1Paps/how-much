@@ -1,5 +1,10 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { createProxyServer } from "./proxy.js";
+import { createStorage } from "./storage.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -7,12 +12,23 @@ const DEFAULT_ROUTES: Record<string, string> = {
   openai: "https://api.openai.com",
 };
 
+function getDbPath(): string {
+  const configDir = join(homedir(), ".how-much");
+  mkdirSync(configDir, { recursive: true });
+  return join(configDir, "how-much.db");
+}
+
 async function main() {
   const port = DEFAULT_PORT;
+  const sessionId = randomUUID();
+  const storage = createStorage(getDbPath());
 
   const proxy = await createProxyServer({
     port,
     routes: DEFAULT_ROUTES,
+    storage,
+    sessionId,
+    currency: "USD",
   });
 
   console.log(`how-much proxy listening on http://localhost:${proxy.port}`);
@@ -23,11 +39,17 @@ async function main() {
 
   process.on("SIGINT", () => {
     console.log("\nShutting down...");
-    proxy.close().then(() => process.exit(0));
+    proxy.close().then(() => {
+      storage.close();
+      process.exit(0);
+    });
   });
 
   process.on("SIGTERM", () => {
-    proxy.close().then(() => process.exit(0));
+    proxy.close().then(() => {
+      storage.close();
+      process.exit(0);
+    });
   });
 }
 
