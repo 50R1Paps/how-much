@@ -13,6 +13,7 @@ import {
   formatTotalReport,
   formatModelBreakdownReport,
 } from "./reports.js";
+import { compareSubscription, formatComparisonReport } from "./compare.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -132,6 +133,47 @@ program
   .option("--by-model", "Show breakdown by model")
   .action((opts: { byModel?: boolean }) => {
     runReport("month", opts.byModel ?? false);
+  });
+
+function runCompare(plan?: string) {
+  const configDir = join(homedir(), ".how-much");
+  mkdirSync(configDir, { recursive: true });
+  const config = loadConfig(configDir);
+  const storage = createStorage(getDbPath());
+
+  let subscriptions = config.subscriptions;
+  if (plan) {
+    subscriptions = subscriptions.filter((s) => s.name === plan);
+    if (subscriptions.length === 0) {
+      console.log(`No subscription named "${plan}" found in config.`);
+      console.log(
+        `Available: ${config.subscriptions.map((s) => s.name).join(", ") || "none"}`,
+      );
+      storage.close();
+      return;
+    }
+  }
+
+  const { start, end } = getDateRange("month");
+  const records = storage.getRecordsByDateRange(start, end);
+  const totalSpent = records.reduce((sum, r) => sum + (r.cost ?? 0), 0);
+  const spentCurrency = config.currency;
+
+  const now = new Date();
+  const results = subscriptions.map((sub) =>
+    compareSubscription(sub, totalSpent, spentCurrency, now),
+  );
+
+  console.log(formatComparisonReport(results));
+  storage.close();
+}
+
+program
+  .command("compare")
+  .description("Compare actual spending vs subscription cost")
+  .option("--plan <name>", "Compare against a specific subscription plan")
+  .action((opts: { plan?: string }) => {
+    runCompare(opts.plan);
   });
 
 program.parse();
