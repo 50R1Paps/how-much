@@ -3,10 +3,16 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { Command } from "commander";
 import { createProxyServer } from "./proxy.js";
 import { createStorage } from "./storage.js";
 import { loadConfig } from "./config.js";
 import { formatRecordLine } from "./format.js";
+import {
+  getDateRange,
+  formatTotalReport,
+  formatModelBreakdownReport,
+} from "./reports.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -20,7 +26,7 @@ function getDbPath(): string {
   return join(configDir, "how-much.db");
 }
 
-async function main() {
+async function runProxy() {
   const port = DEFAULT_PORT;
   const sessionId = randomUUID();
   const configDir = join(homedir(), ".how-much");
@@ -67,7 +73,65 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error("Failed to start:", err);
-  process.exit(1);
-});
+function runReport(period: "today" | "week" | "month", byModel: boolean) {
+  const configDir = join(homedir(), ".how-much");
+  mkdirSync(configDir, { recursive: true });
+  const config = loadConfig(configDir);
+  const storage = createStorage(getDbPath());
+
+  const { start, end, label } = getDateRange(period);
+  const records = storage.getRecordsByDateRange(start, end);
+
+  if (records.length === 0) {
+    console.log(`No spending recorded for ${label}.`);
+    storage.close();
+    return;
+  }
+
+  if (byModel) {
+    console.log(formatModelBreakdownReport(label, records, config.currency));
+  } else {
+    console.log(formatTotalReport(label, records, config.currency));
+  }
+
+  storage.close();
+}
+
+const program = new Command();
+
+program
+  .name("how-much")
+  .description("Track LLM API costs in real time")
+  .version("0.1.0")
+  .action(() => {
+    runProxy().catch((err) => {
+      console.error("Failed to start:", err);
+      process.exit(1);
+    });
+  });
+
+program
+  .command("today")
+  .description("Show total spending for today")
+  .option("--by-model", "Show breakdown by model")
+  .action((opts: { byModel?: boolean }) => {
+    runReport("today", opts.byModel ?? false);
+  });
+
+program
+  .command("week")
+  .description("Show total spending for the last 7 days")
+  .option("--by-model", "Show breakdown by model")
+  .action((opts: { byModel?: boolean }) => {
+    runReport("week", opts.byModel ?? false);
+  });
+
+program
+  .command("month")
+  .description("Show total spending for the current month")
+  .option("--by-model", "Show breakdown by model")
+  .action((opts: { byModel?: boolean }) => {
+    runReport("month", opts.byModel ?? false);
+  });
+
+program.parse();

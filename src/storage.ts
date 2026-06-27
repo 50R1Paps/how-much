@@ -17,6 +17,7 @@ export interface CostRecord {
 export interface Storage {
   insertRecord(record: CostRecord): void;
   getAllRecords(): CostRecord[];
+  getRecordsByDateRange(startISO: string, endISO: string): CostRecord[];
   close(): void;
 }
 
@@ -55,6 +56,13 @@ export function createStorage(dbPath: string): Storage {
     },
     getAllRecords(): CostRecord[] {
       return db.prepare("SELECT * FROM cost_records").all() as CostRecord[];
+    },
+    getRecordsByDateRange(startISO: string, endISO: string): CostRecord[] {
+      return db
+        .prepare(
+          "SELECT * FROM cost_records WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC",
+        )
+        .all(startISO, endISO) as CostRecord[];
     },
     close() {
       db.close();
