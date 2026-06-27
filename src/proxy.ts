@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { extractUsage } from "./adapters/openai.js";
+import { extractUsage, extractUsageFromSSE } from "./adapters/openai.js";
 import { calculateCost, type CostCalculator } from "./cost.js";
 import type { Storage } from "./storage.js";
 
@@ -85,7 +85,7 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
         if (response.body) {
           const contentType = response.headers.get("content-type") || "";
           const isStreaming = contentType.includes("text/event-stream");
-          const shouldBuffer = storage && !isStreaming;
+          const shouldTrack = !!storage;
 
           const reader = response.body.getReader();
           const chunks: Buffer[] = [];
@@ -94,15 +94,17 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
               const { done, value } = await reader.read();
               if (done) break;
               res.write(value);
-              if (shouldBuffer) {
+              if (shouldTrack) {
                 chunks.push(Buffer.from(value));
               }
             }
             res.end();
 
-            if (shouldBuffer && chunks.length > 0) {
+            if (shouldTrack && chunks.length > 0) {
               const body = Buffer.concat(chunks).toString("utf-8");
-              const usage = extractUsage(body);
+              const usage = isStreaming
+                ? extractUsageFromSSE(body)
+                : extractUsage(body);
               if (usage) {
                 let cost: number | null = null;
                 try {
