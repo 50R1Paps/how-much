@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { createProxyServer } from "./proxy.js";
 import { createStorage } from "./storage.js";
+import { loadConfig } from "./config.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -21,6 +22,10 @@ function getDbPath(): string {
 async function main() {
   const port = DEFAULT_PORT;
   const sessionId = randomUUID();
+  const configDir = join(homedir(), ".how-much");
+  mkdirSync(configDir, { recursive: true });
+
+  const config = loadConfig(configDir);
   const storage = createStorage(getDbPath());
 
   const proxy = await createProxyServer({
@@ -28,7 +33,7 @@ async function main() {
     routes: DEFAULT_ROUTES,
     storage,
     sessionId,
-    currency: "USD",
+    currency: config.currency,
   });
 
   console.log(`how-much proxy listening on http://localhost:${proxy.port}`);
