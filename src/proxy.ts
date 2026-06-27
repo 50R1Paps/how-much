@@ -1,7 +1,9 @@
 import { createServer, type Server } from "node:http";
 import { extractUsage, extractUsageFromSSE } from "./adapters/openai.js";
 import { calculateCost, type CostCalculator } from "./cost.js";
-import type { Storage } from "./storage.js";
+import type { Storage, CostRecord } from "./storage.js";
+
+export type OnRecordCallback = (record: CostRecord) => void;
 
 export interface ProxyOptions {
   port: number;
@@ -10,6 +12,7 @@ export interface ProxyOptions {
   sessionId?: string;
   currency?: string;
   computeCostFn?: CostCalculator;
+  onRecord?: OnRecordCallback;
 }
 
 export interface ProxyServer {
@@ -26,6 +29,7 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
       sessionId,
       currency = "USD",
       computeCostFn = calculateCost,
+      onRecord,
     } = options;
 
     const server = createServer(async (req, res) => {
@@ -119,7 +123,7 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
                 } catch {
                   console.warn(`⚠ Unknown model: ${usage.model}`);
                 }
-                storage!.insertRecord({
+                const record: CostRecord = {
                   timestamp: new Date().toISOString(),
                   provider: providerKey,
                   model: usage.model,
@@ -130,7 +134,9 @@ export function createProxyServer(options: ProxyOptions): Promise<ProxyServer> {
                   cost,
                   currency,
                   session_id: sessionId ?? "",
-                });
+                };
+                storage!.insertRecord(record);
+                if (onRecord) onRecord(record);
               }
             }
           };

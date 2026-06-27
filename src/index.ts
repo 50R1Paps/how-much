@@ -6,6 +6,7 @@ import { mkdirSync } from "node:fs";
 import { createProxyServer } from "./proxy.js";
 import { createStorage } from "./storage.js";
 import { loadConfig } from "./config.js";
+import { formatRecordLine } from "./format.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -28,12 +29,20 @@ async function main() {
   const config = loadConfig(configDir);
   const storage = createStorage(getDbPath());
 
+  let sessionTotal = 0;
+
   const proxy = await createProxyServer({
     port,
     routes: DEFAULT_ROUTES,
     storage,
     sessionId,
     currency: config.currency,
+    onRecord: (record) => {
+      if (record.cost !== null) {
+        sessionTotal += record.cost;
+      }
+      console.log(formatRecordLine(record, sessionTotal));
+    },
   });
 
   console.log(`how-much proxy listening on http://localhost:${proxy.port}`);
